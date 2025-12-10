@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <title>Holdem Real-time (Binary Optimized)</title>
+    <meta charset="UTF-8">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; }
+        .box { margin-bottom: 20px; border: 1px solid #ddd; padding: 15px; border-radius: 8px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); }
+        button { padding: 8px 15px; cursor: pointer; border-radius: 4px; border: 1px solid #999; }
+        input, select { padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
+        h2 { color: #333; }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #444; padding-bottom: 2px; }
+    </style>
+</head>
+<body>
+<h2>♠️ 텍사스 홀덤 실시간 테이블 (Room 1)</h2>
+
+<div class="box">
+    <h3>1. 서버 연결</h3>
+    <button onclick="connect()">🔌 서버 연결 (Connect)</button>
+    <span id="status" style="margin-left: 10px; color: gray; font-weight: bold;">연결 대기 중...</span>
+</div>
+
+<div class="box">
+    <h3>2. 플레이어 액션</h3>
+    <div>
+        <label>ID:</label> <input type="text" id="playerId" value="User_Genius">
+        <label>Amount:</label> <input type="number" id="amount" value="1000">
+    </div>
+    <br>
+
+    <label>Action:</label>
+    <select id="actionSelect">
+        <option value="0">CHECK (0)</option>
+        <option value="1">CALL (1)</option>
+        <option value="2" selected>BET (2)</option>
+        <option value="3">RAISE (3)</option>
+        <option value="4">FOLD (4)</option>
+        <option value="5">ALL_IN (5)</option>
+    </select>
+
+    <hr/>
+
+    <button onclick="sendJsonBet()">일반 베팅 (JSON)</button>
+
+    <button onclick="sendRealBinaryBet()" style="background-color: #d4edda; border: 1px solid #28a745; font-weight: bold;">
+        🚀 최적화 베팅 (Real Binary)
+    </button>
+</div>
+
+<h3>📺 실시간 게임 상태 (Live)</h3>
+<pre id="gameState" style="background:#f0f0f0; padding:15px; border-radius:5px; font-size: 14px;">서버 연결 후 액션을 보내보세요.</pre>
+
+<h3>📝 전송 로그 (Log)</h3>
+<div id="logs" style="background:#222; color:#0f0; padding:10px; height: 200px; overflow-y: scroll; font-family: monospace; border-radius:5px;"></div>
+
+<script>
+    var stompClient = null;
+    var tableId = "room1";
+
+    function log(msg) {
+        var logs = document.getElementById('logs');
+        var div = document.createElement('div');
+        div.className = "log-entry";
+        div.innerHTML = "> " + msg;
+        logs.appendChild(div);
+        logs.scrollTop = logs.scrollHeight;
+    }
+
+    function connect() {
+        var socket = new SockJS('http://localhost:8080/ws-holdem');
+        stompClient = Stomp.over(socket);
+        stompClient.connect({}, function (frame) {
+            console.log('Connected: ' + frame);
+            document.getElementById('status').innerText = "✅ 연결됨";
+            document.getElementById('status').style.color = "green";
+            log("서버 연결 성공!");
+
+            // [구독] 서버가 보내는 테이블 상태를 실시간으로 받음 (JSON)
+            stompClient.subscribe('/topic/table/' + tableId, function (response) {
+                var tableData = JSON.parse(response.body);
+                // 화면 갱신
+                document.getElementById('gameState').innerText =
+                    "현재 Pot: " + tableData.pot.totalAmount + "\n" +
+                    "참가자 수: " + tableData.players.length + "\n" +
+                    "현재 라운드: " + tableData.currentRound;
+
+                log("📥 [상태 갱신] Pot이 " + tableData.pot.totalAmount + "로 변경됨");
+            });
+
+            alert("연결되었습니다! Swagger로 방(room1)을 만들고, 플레이어(User_Genius)를 입장시킨 후 테스트하세요.");
+        });
+    }
+
+    // 1. JSON 전송 (기존 방식)
+    function sendJsonBet() {
+        var pid = document.getElementById('playerId').value;
+        var amt = document.getElementById('amount').value;
+        var select = document.getElementById("actionSelect");
+        var actionText = select.options[select.selectedIndex].text.split(" ")[0];
+
+        var jsonPayload = JSON.stringify({
+            'playerId': pid,
+            'action': actionText,
+            'amount': amt
+        });
+
+        stompClient.send("/app/table/" + tableId + "/action", {}, jsonPayload);
+
+        var size = new Blob([jsonPayload]).size;
+        log("📤 [JSON 전송] 크기: " + size + " bytes");
+    }
+
+    // 2. 바이너리 전송 (최적화 방식)
+    function sendRealBinaryBet() {
+        var pid = document.getElementById('playerId').value;
+        var actionVal = parseInt(document.getElementById('actionSelect').value);
+        var amt = BigInt(document.getElementById('amount').value);
+
+        // [직렬화]
+        var encoder = new TextEncoder();
+        var idBytes = encoder.encode(pid);
+        var idLength = idBytes.length;
+
+        // 구조: [Action(1)] + [Amount(8)] + [ID_Len(4)] + [ID_Body(N)]
+        var totalSize = 1 + 8 + 4 + idLength;
+        var buffer = new ArrayBuffer(totalSize);
+        var view = new DataView(buffer);
+
+        var offset = 0;
+        view.setInt8(offset, actionVal); offset += 1;          // Action
+        view.setBigInt64(offset, amt); offset += 8;            // Amount
+        view.setInt32(offset, idLength); offset += 4;          // ID Length
+        new Uint8Array(buffer).set(idBytes, offset);           // ID Bytes
+
+        // [전송] 헤더에 바이너리 타입 명시
+        var headers = {'content-type': 'application/json'};
+        var base64Str = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        // stompClient.send("/app/table/" + tableId + "/action/binary", headers, new Uint8Array(buffer));
+        stompClient.send("/app/table/" + tableId + "/action/binary", headers, JSON.stringify({data: base64Str}));
+
+        log("🚀 <b>[Binary 전송]</b> 크기: <span style='color:yellow'>" + totalSize + " bytes</span> (압축됨!)");
+    }
+</script>
+</body>
+</html>

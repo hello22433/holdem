@@ -1,0 +1,13 @@
+plugins {
+    id 'java'
+}
+
+dependencies {
+    // core는 순수 로직이라 외부 의존성 거의 없음
+    // 필요하면 JDK 기본 라이브러리로 처리
+
+    compileOnly 'org.projectlombok:lombok:1.18.32'
+    annotationProcessor 'org.projectlombok:lombok:1.18.32'
+}
+
+tasks.register("prepareKotlinBuildScriptModel"){}

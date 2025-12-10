@@ -1,0 +1,4 @@
+rootProject.name = 'holdem'
+
+include 'core'
+include 'api'
